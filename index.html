@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>NFBC Draft Summary</title>
+        <link rel="shortcut icon" href="https://dl.dropboxusercontent.com/scl/fi/cu5damqzrnvdcovmwi01x/favicon.ico?rlkey=wbkqfvg64q060d46tlswa67r2&st=axfflxd9&dl=0&raw=1" />
+        <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.8.3/jquery.min.js"></script>
+		<meta charset="utf-8"/>
+</head>
+
+<script>
+window.onload = function()
+{ 
+	originalTable = $('#availablePlayers_table').clone();
+	originalMenu = $('#menu').clone();
+	originalMyTeam =$('#myteam_table').clone();
+	GetData('Roster');
+}
+
+var LEAGUEID = 805;
+var TEAMID = 10816;
+var total_cash = 260;
+var hitter_cash = 165;
+var sp_cash = 70;
+var rp_cash = 25;
+var pitcher_cash = sp_cash + rp_cash;
+var draft_data = 'https://draft.shgn.com/api/public/players/dp/' + LEAGUEID;
+var hitter_link = 'https://dl.dropboxusercontent.com/scl/fi/j3ub6gjk38swr07h0z2re/hitter_avg_values.csv?rlkey=64tkiorw5fq6oi0pc4u4ozpx7&st=h8ci02dg&dl=0&raw=1';
+var sp_link = 'https://dl.dropboxusercontent.com/scl/fi/b9juflwvqh2z3dx4pkz7k/pitcher_avg_values.csv?rlkey=2d47x1dfbdx3dwlnf4w51r40m&st=ekz3rw0x&dl=0&raw=1';
+var rp_link = 'https://dl.dropboxusercontent.com/scl/fi/jcaqqlng7k9vmjfd5n3i6/rp_avg_values.csv?rlkey=85bneqjywwc6dfjrywzfm7tad&st=nencno54&dl=0&raw=1';
+var links = [hitter_link, sp_link, rp_link];
+var proj_types = ['hitters', 'sp', 'rp'];
+var drafted_players = [];
+var available_hitters = [];
+var available_sps = [];
+var available_rps = [];
+var myTeam;
+var hitters, pitchers;
+var proj = [];
+var nPitchers = 9;
+var nHitters = 14;
+var hitter_stats2add = ['mR', 'mRBI', 'mHR', 'mSB', 'mAVG'];
+var pitcher_stats2add = ['mW', 'mK', 'mERA', 'mWHIP', 'mSV'];
+var originalTable;
+var originalMenu;
+var lastClickedHeader = null;
+var gotProjections = false;
+var busy = false;
+var pageURL = window.location.href;
+var suf = pageURL.substring(pageURL.indexOf("?")+1, pageURL.length);
+var maxPick = 1000;
+if (!isNaN(Number(suf))) maxPick = Number(suf);
+
+
+function GetData(loc)
+{
+	if (busy) return;
+	busy = true;
+	drafted_players = [];
+	var op = {};
+	$.get(draft_data, function(data)
+	{
+		// drafted player list
+		for (i = 0; i < data.length; i++)
+		{
+			if (data[i].pick !== null)
+			{
+				// show position but drop UT from everyone who isn't just UT
+				var pos =  data[i].elig.join(', ').replace(", UT", '');
+
+				// build drafted players array
+				drafted_players.push(
+				{
+					Name: data[i].f + ' ' + data[i].l,
+					Cost: data[i].pick.b,
+					Team: data[i].pick.te,
+					Position: pos,
+					isHitter: Number(data[i].elig.indexOf('P') === -1 || data[i].l === 'Ohtani'),
+					Pick: data[i].pick.tu,
+					TeamPos: null,
+					PosAssigned: 0,
+					ChartOrder: null
+				});
+			}
+		}
+		
+		drafted_players = standardizeNames(drafted_players);
+					
+		// filter my team
+		drafted_players = drafted_players.filter(item => item.Pick < maxPick);
+		//maxPick = maxPick + 5;
+		var round = Math.ceil((drafted_players.length+1)/15)
+		var pick = (drafted_players.length+1) % 15;
+		if (pick === 0) pick = 15;
+		$('#pick').html('<b>Next Pick: ' + round + '.' + pick + '</b>');
+		
+		myTeam = drafted_players.filter(item => item.Team === TEAMID);
+		if (!gotProjections)
+		{
+			getProjections(0);
+			gotProjections = true;
+		}
+		else
+		{
+			createMyTeam(loc);
+		}
+	});
+}
+
+
+function getProjections(i)
+{
+	$.get(links[i], function(data)
+	{
+		proj[proj_types[i]] = csvToJson(data);
+		if (i < (links.length - 1)) getProjections(i + 1);
+		else createMyTeam('Roster');
+	});
+}
+
+function createMyTeam(loc)
+{
+	var menuHeadings = ['Roster', 'C', '1B', '2B', '3B', 'SS', 'CI', 'MI', 'OF', 'UT', 'SP', 'RP'];
+	var hitterPositions = ['C', 'C', '1B', '2B', '3B', 'SS', 'MI', 'CI', 'OF', 'OF', 'OF', 'OF', 'OF', 'UT'];
+	var posAssigned = [];
+	var hitterHeadings = ['TeamPos', 'Name', 'POS', '$'];
+	var pitcherHeadings = ['TeamPos', 'Name', 'POS', '$'];
+	var pitcherOtherStats = ['W', 'SO', 'IP', 'ERA', 'WHIP', 'SV'];
+	var hitterOtherStats = ['R', 'RBI', 'HR', 'SB', 'AVG', 'H', 'AB'];
+	var hitter_projections = proj.hitters;
+	var sp_projections = proj.sp;
+	var rp_projections = proj.rp;
+	var sp;
+	hitters = myTeam.filter(item => item.isHitter === 1);
+	pitchers = myTeam.filter(item => item.isHitter === 0);
+	
+	// compute available players
+	available_hitters = proj.hitters.filter(obj1 => !drafted_players.some(obj2 => obj1.Name === obj2.Name & obj2.isHitter === 1));
+	available_sps = proj.sp.filter(obj1 => !drafted_players.some(obj2 => obj1.Name === obj2.Name & obj2.isHitter === 0));
+	available_rps = proj.rp.filter(obj1 => !drafted_players.some(obj2 => obj1.Name === obj2.Name & obj2.isHitter === 0));
+		
+	// menu table
+	$('#menu').replaceWith(originalMenu.clone());
+	var menuText = '<table class="styled-table">';
+	
+	// headings
+	menuText += '<thead><tr>';
+	for (i = 0; i < menuHeadings.length; i++)
+	{
+		menuText += '<th>' + menuHeadings[i] + '</th>';
+	}
+	menuText += '</tr><thead></table>'
+	$('#menu').append(menuText);
+		
+	// update hitter table headings
+	for (j = 0; j < hitter_stats2add.length; j++)
+	{
+		hitterHeadings.push(hitter_stats2add[j]);
+	}
+			
+	// add stats of interest to my hitters
+	for (i = 0; i < hitters.length; i++)
+	{
+		var this_proj = hitter_projections.filter(item => item.Name === hitters[i].Name);
+		for (j = 0; j < hitter_stats2add.length; j++)
+		{
+			hitters[i][hitter_stats2add[j]] = roundNumber(this_proj[0][hitter_stats2add[j]],2);
+		}
+		for (j = 0; j < hitterOtherStats.length; j++)
+		{
+			hitters[i][hitterOtherStats[j]] = roundNumber(this_proj[0][hitterOtherStats[j]],2);
+		}
+	}
+	
+	// update pitcher table headings
+	for (j = 0; j < pitcher_stats2add.length; j++)
+	{
+		pitcherHeadings.push(pitcher_stats2add[j]);
+	}
+	
+	// add stats of interest to my pitchers
+	for (i = 0; i < pitchers.length; i++)
+	{
+		var this_proj = sp_projections.filter(item => item.Name === pitchers[i].Name);
+		if (this_proj.length === 0) 
+		{
+			sp = 'RP';
+			this_proj = rp_projections.filter(item => item.Name === pitchers[i].Name);
+		}
+		else sp = 'SP';
+		
+			
+		for (j = 0; j < pitcher_stats2add.length; j++)
+		{
+			pitchers[i][pitcher_stats2add[j]] = roundNumber(this_proj[0][pitcher_stats2add[j]],2);
+		}
+		for (j = 0; j < pitcherOtherStats.length; j++)
+		{
+			pitchers[i][pitcherOtherStats[j]] = roundNumber(this_proj[0][pitcherOtherStats[j]],2);
+		}
+		pitchers[i].sp = sp;
+	}
+	
+	var starting_pitchers = pitchers.filter(item => item.sp === 'SP');
+	
+	var spent_hitters = hitters.reduce((sum, obj) => sum + Number(obj.Cost),0);
+	var spent_pitchers = pitchers.reduce((sum, obj) => sum + Number(obj.Cost),0);
+	var hitters_remaining = nHitters-hitters.length;
+	var pitchers_remaining = nPitchers-pitchers.length;
+	var hdr, pdr;
+	
+	if (hitters_remaining === 0 && pitchers_remaining === 0)
+	{
+		hdr = 0;
+		pdr = 0;
+	}
+	else if (hitters_remaining === 0)
+	{
+		pdr = total_cash - spent_pitchers - spent_hitters;
+		hdr = 0;
+	}
+	else if (pitchers_remaining === 0)
+	{
+		hdr = total_cash - spent_pitchers - spent_hitters;
+		pdr = 0;
+	}
+	else if (spent_hitters + hitters_remaining > hitter_cash)
+	{
+		hdr = hitters_remaining;
+		pdr = total_cash - spent_pitchers - spent_hitters - hdr;
+	}
+	else if (spent_pitchers + pitchers_remaining > pitcher_cash)
+	{
+		pdr = pitchers_remaining;
+		hdr = total_cash - spent_pitchers - spent_hitters - pdr;
+	}
+	else
+	{
+		hdr = hitter_cash - spent_hitters;
+		pdr = pitcher_cash - spent_pitchers;
+	}
+	
+	
+	// sort hitters into their positions
+	
+	// one and only matches
+	for (var i = 0; i < hitterPositions.length; i++)
+	{
+		posAssigned.push(0);
+		var this_pos = hitterPositions[i];
+		var str;
+		
+		if (this_pos === '1B') str = '1B, CI';
+		else if (this_pos === '3B') str = '3B, CI';
+		else if (this_pos === '2B') str = '2B, MI';
+		else if (this_pos === 'SS') str = 'SS, MI';
+		else str = this_pos;
+		
+		var idx = hitters.findIndex(innerArray => innerArray.Position === str & innerArray.PosAssigned === 0);
+		if (idx > -1)
+		{
+			hitters[idx].TeamPos = this_pos;
+			hitters[idx].PosAssigned = 1;
+			hitters[idx].ChartOrder = i;
+			posAssigned[i] = 1;
+		}
+	}
+
+	// multiple positions, but only one match
+	for (var i = 0; i < hitterPositions.length; i++)
+	{
+		if (posAssigned[i] === 0)
+		{
+			var this_pos = hitterPositions[i];
+			var hitterTmp = hitters.filter(item => item.PosAssigned === 0 & item.Position.includes(this_pos));
+			var str;
+			if (this_pos === 'C') str = 'C,';
+			else str = this_pos;
+			if (hitterTmp.length === 1)
+			{
+				var idx = hitters.findIndex(innerArray => innerArray.Position.includes(str) & innerArray.PosAssigned === 0);
+				if (idx > -1)
+				{
+					hitters[idx].TeamPos = this_pos;
+					hitters[idx].PosAssigned = 1;
+					hitters[idx].ChartOrder = i;
+					posAssigned[i] = 1;
+				}
+			}
+		}
+	}
+	
+	
+	// fill out the rest of the positions with some trial and error
+	completed = false;
+	var hitter_copy = JSON.parse(JSON.stringify(hitters));
+	c = 0;
+	while (!completed)
+	{
+		// break if while loop gets stuck
+		c++;
+		if (c > 1000) 
+		{
+			$('#loading').html('Error - while loop stuck.');
+			return;
+		}
+		hitters = JSON.parse(JSON.stringify(hitter_copy));
+		for (var i = 0; i < hitterPositions.length; i++)
+		{
+			if (posAssigned[i] === 0)
+			{
+				var this_pos = hitterPositions[i];
+				var str;
+				if (this_pos === 'C') str = 'C,';
+				else str = this_pos;
+				
+				var indices = [];
+				// get all available options of where to assign this position
+				if (this_pos !== 'OF' && this_pos !== 'C')
+				{
+					indices = hitters.map((innerArray, index) => innerArray.Position.includes(str) & !innerArray.Position.includes('OF') & innerArray.PosAssigned === 0 ? index : -1)
+						 .filter(index => index !== -1);
+				}
+				
+				if (indices.length === 0)
+				{
+					indices = hitters.map((innerArray, index) => innerArray.Position.includes(str) & innerArray.PosAssigned === 0 ? index : -1)
+						  .filter(index => index !== -1);
+				}
+				
+				if (indices.length > 0)
+				{
+					var idx = indices[Math.floor(Math.random() * indices.length)];
+					hitters[idx].TeamPos = this_pos;
+					hitters[idx].PosAssigned = 1;
+					hitters[idx].ChartOrder = i;
+					posAssigned[i] = 1;
+				}
+				
+				if (this_pos === 'UT' && posAssigned[i] === 0)
+				{
+					var idx = hitters.findIndex(innerArray => innerArray.PosAssigned === 0);
+					if (idx > -1)
+					{
+						hitters[idx].TeamPos = this_pos;
+						hitters[idx].PosAssigned = 1;
+						hitters[idx].ChartOrder = hitterPositions.length - 1;
+						posAssigned[i] = 1;
+					}
+				}
+			}
+			
+		}
+		// see if we filled everyone in
+		var idx = hitters.findIndex(innerArray => innerArray.PosAssigned === 0);
+		if (idx === -1)
+		{
+			completed = true;
+		}
+	}
+	
+	// HITTER table
+	$('#myteam_table').replaceWith(originalMyTeam.clone());
+	var tableText = '<div class="table-container">'; 
+	tableText += '<table class="team-table">';
+	
+	// headings
+	tableText += '<thead><tr>';
+	for (var i = 0; i < hitterHeadings.length; i++)
+	{
+		var th = hitterHeadings[i];
+		if (th !== 'TeamPos' && th !== 'Name') th = th.replace('m', '');
+		
+		tableText += '<th>' + th + '</th>';
+	}
+	tableText += '</tr></thead><tbody>';
+	
+	// hitter player info
+	for (var i = 0; i < hitterPositions.length; i++)
+	{
+		var tmp = hitters.filter(item => item.ChartOrder === i);
+		tableText += '<tr>';
+		tableText += '<td>' + hitterPositions[i] + '</td>';
+		tableText += '<td>' + (tmp.length === 1 ? tmp[0].Name : '') + '</td>';
+		tableText += '<td>' + (tmp.length === 1 ? tmp[0].Position : '') + '</td>';
+		tableText += '<td>' + (tmp.length === 1 ? tmp[0].Cost : '') + '</td>';
+		for (j = 0; j < hitter_stats2add.length; j++)
+		{
+			tableText += '<td>' + (tmp.length === 1 ? tmp[0][hitter_stats2add[j]] : '') + '</td>';
+		}
+		tableText += '</tr>';
+	}
+	
+	// hitter z-score averages
+	tableText += '<tr>';
+	for (var i  = 0; i < hitterHeadings.length; i++)
+	{
+		var fieldName = hitterHeadings[i];
+		if (hitter_stats2add.indexOf(fieldName) > -1)
+		{
+			tableText += '<th>' + roundNumber(hitters.reduce((sum, obj) => sum + Number(obj[fieldName]), 0) / hitters.length, 2) + '</th>';
+		}
+		else if (fieldName === '$') tableText += '<th>AVG:</th>';
+		else if (fieldName === 'TeamPos') tableText += '<th>R: $' + hdr + '</th>';
+		else if (fieldName === 'Name' && hitters.length < nHitters) tableText += '<th>R$/P: $' + roundNumber(hdr/hitters_remaining,2) + '</th>';
+		else tableText += '<td> </td>';
+	}
+	tableText += '</tr>';
+	
+	// hitter totals
+	tableText += '<tr>';
+	var hitter_totals = {};
+	for (var i = 0; i < hitterHeadings.length; i++)
+	{
+		var fieldName = hitterHeadings[i];
+		var H = hitters.reduce((sum, obj) => sum + Number(obj.H), 0);
+		var AB = hitters.reduce((sum, obj) => sum + Number(obj.AB), 0);
+		if (fieldName === '$') tableText += '<th>Total:</th>';
+		else if (fieldName === 'mR' || fieldName === 'mRBI' || fieldName === 'mHR' || fieldName === 'mSB') 
+		{
+			var this_field = fieldName.replace('m', '');
+			hitter_totals[this_field] = hitters.reduce((sum, obj) => sum + Number(obj[this_field]), 0);
+			tableText += '<th>' + roundNumber(hitter_totals[this_field],0) + '</th>';
+		}
+		else if (fieldName === 'mAVG')
+		{
+			var tmp = [];
+			for (j = 0; j < hitters.length; j++) tmp.push(Number(hitters[j].AB)*Number(hitters[j].AVG));
+			hitter_totals.AVG = roundNumber(H/AB, 3).toString().slice(1);
+			tableText += '<th>' + hitter_totals.AVG + '</th>';
+		}
+		else tableText += '<td> </td>';
+	}
+	tableText += '</tr>';
+	
+	/*
+	// hitter pace
+	tableText += '<tr>';
+	for (var i = 0; i < hitterHeadings.length; i++)
+	{
+		var fieldName = hitterHeadings[i]
+		var this_field = fieldName.replace('m', '');
+		if (fieldName === '$') tableText += '<th>Pace:</th>';
+		else if (this_field === 'R' || this_field === 'RBI' || this_field === 'HR' || this_field === 'SB')
+		{
+			tableText += '<th>' + roundNumber(hitter_totals[this_field]*nHitters/hitters.length,0) +'</th>'; 	
+		}
+		else if (this_field === 'AVG') tableText += '<th>' + hitter_totals.AVG +'</th>'; 		
+		else tableText += '<td> </td>';
+	}
+	tableText += '</tr>';
+	*/
+	
+	// hitter targets
+	tableText += '<tr>';
+	for (var i = 0; i < hitterHeadings.length; i++)
+	{
+		var fieldName = hitterHeadings[i];
+		if (fieldName === '$') tableText += '<th>Target:</th>';
+		else if (fieldName === 'mR') tableText += '<th>1023</th>'; 		
+		else if (fieldName === 'mRBI') tableText += '<th>993</th>';
+		else if (fieldName === 'mHR') tableText += '<th>286</th>';
+		else if (fieldName === 'mSB') tableText += '<th>190</th>';
+		else if (fieldName === 'mAVG') tableText += '<th>.256</th>';
+		else tableText += '<td> </td>';
+	}
+	tableText += '</tr>';
+	
+	tableText += '</tbody></table>';
+	
+	// PITCHER TABLE
+	tableText += '<table class="team-table">';
+	
+	// headings
+	tableText += '<thead><tr>';
+	for (var i  = 0; i < pitcherHeadings.length; i++)
+	{
+		var th = pitcherHeadings[i];
+		if (th !== 'TeamPos' && th !== 'Name') th = th.replace('m', '');
+		tableText += '<th>' +th +'</th>';
+	}
+	tableText += '</tr></thead><tbody>';
+	
+	// pitcher player info
+	for (var i = 0; i < nPitchers; i++)
+	{
+		var tmp = i < pitchers.length ? pitchers[i] : [];
+		tableText += '<tr>';
+		tableText += '<td>' + 'P' + '</td>';
+		tableText += '<td>' + (tmp.length !== 0 ? tmp.Name : '') + '</td>';
+		tableText += '<td>' + (tmp.length !== 0 ? tmp.sp : '') + '</td>';
+		tableText += '<td>' + (tmp.length !== 0 ? tmp.Cost : '') + '</td>';
+		for (j = 0; j < pitcher_stats2add.length; j++)
+		{
+			tableText += '<td>' + (tmp.length !== 0 ? (tmp[pitcher_stats2add[j]] === 'NaN' ? '': tmp[pitcher_stats2add[j]]) : '') + '</td>';
+		}
+		tableText += '</tr>';
+	}
+	
+	// pitcher z-score averages
+	tableText += '<tr>';
+	for (var i  = 0; i < pitcherHeadings.length; i++)
+	{
+		var fieldName = pitcherHeadings[i];
+		if (pitcher_stats2add.indexOf(fieldName) > -1 && fieldName !== 'mSV')
+		{
+			tableText += '<th>' + roundNumber(starting_pitchers.reduce((sum, obj) => sum + Number(obj[fieldName]), 0) / starting_pitchers.length, 2) + '</th>';
+		}
+		else if (fieldName === 'TeamPos') tableText += '<th>R: $' + pdr + '</th>';
+		else if (fieldName === 'Name' && pitchers.length < nPitchers) tableText += '<th>R$/P: $' + roundNumber(pdr/pitchers_remaining,2) + '</th>';
+		else if (fieldName === '$') tableText += '<th>SP AVG:</th>';
+		else tableText += '<td> </td>';
+	}
+	tableText += '</tr>';
+	
+	// pitcher totals
+	tableText += '<tr>';
+	for (var i = 0; i < pitcherHeadings.length; i++)
+	{
+		var fieldName = pitcherHeadings[i];
+		var IP = pitchers.reduce((sum, obj) => sum + Number(obj.IP), 0)
+		if (fieldName === '$') tableText += '<th>Total:</th>';
+		else if (fieldName === 'mW') tableText += '<th>' + roundNumber(pitchers.reduce((sum, obj) => sum + Number(obj.W), 0),0) + '</th>';
+		else if (fieldName === 'mK') tableText += '<th>' + roundNumber(pitchers.reduce((sum, obj) => sum + Number(obj.SO), 0),0) + '</th>';
+		else if (fieldName === 'mSV') tableText += '<th>' + roundNumber(pitchers.reduce((sum, obj) => sum + (isNaN(Number(obj.SV)) ? 0 : Number(obj.SV)), 0),0) + '</th>';
+		else if (fieldName === 'mERA' || fieldName === 'mWHIP')
+		{
+			var tmp = [];
+			var tmpField = fieldName.replace('m', '');
+			for (j = 0; j < pitchers.length; j++) tmp.push(Number(pitchers[j].IP)*Number(pitchers[j][tmpField]));
+			tableText += '<th>' + roundNumber(tmp.reduce((sum, num) => sum + num, 0) / IP, 2) + '</th>';
+		}
+		else tableText += '<td> </td>';
+	}
+	tableText += '</tr>';
+	
+	// pitcher targets
+	tableText += '<tr>';
+	for (var i = 0; i < pitcherHeadings.length; i++)
+	{
+		var fieldName = pitcherHeadings[i];
+		if (fieldName === '$') tableText += '<th>Target:</th>';
+		else if (fieldName === 'mW') tableText += '<th>82*</th>'; //90
+		else if (fieldName === 'mK') tableText += '<th>1271*</th>'; //1362
+		else if (fieldName === 'mERA') tableText += '<th>3.59</th>';
+		else if (fieldName === 'mWHIP') tableText += '<th>1.16</th>';
+		else if (fieldName === 'mSV') tableText += '<th>55*</th>'; //72
+		else tableText += '<td> </td>';
+	}
+	
+	tableText += '</tbody></table>';
+	tableText += '</div>'; // Close the container for the tables
+	$('#myteam_table').append(tableText);
+	
+	// show table
+	$('#loading').hide();
+	if (loc === 'Roster')
+	{
+		showMyTeam();
+	}
+	else
+	{
+		createAvailablePlayers(loc);
+	}
+}
+
+function showMyTeam() {
+  // Attach event listener to each table heading
+  const tableHeaders = document.querySelectorAll('#menu th');
+
+  tableHeaders.forEach(function(header) {
+    header.addEventListener('click', function() {
+      const headerText = header.innerText; // Get the text of the clicked header
+      handleClick(headerText); // Call the function with the header text as input
+      highlightHeader(header); // Highlight the clicked header
+    });
+  });
+  
+  $('#myteam_table').show();
+  $('#availablePlayers_table').hide();
+  window.scrollTo({
+    top: 0,
+    left: 0,
+    behavior: 'auto' // Optional: 'smooth' for smooth scrolling
+  });
+  busy = false;
+}
+
+function createAvailablePlayers(pos)
+{
+	$('#availablePlayers_table').replaceWith(originalTable.clone());
+	
+	// AVAILABLE HITTERS
+	var tableText = '<table id="player_table" class="styled-table">';
+	
+	// headings
+	var availableHitterHeadings = ['Name', 'Team','POS', 'RS_Dollars', 'dollarRange', 'ADP', 'projValue', 'mR', 'mRBI', 'mHR', 'mSB', 'mAVG', 'mTotal'];
+	var availableSPHeadings = ['Name', 'Team', 'RS_Dollars', 'dollarRange', 'ADP', 'projValue', 'mW', 'mK', 'mERA', 'mWHIP'];
+	var availableRPHeadings = ['Name', 'Team', 'RS_Dollars', 'dollarRange', 'ADP', 'projValue', 'mSV', 'SV','mW', 'mK', 'mERA', 'mWHIP'];
+	var theseHeadings;
+	var thisCol;
+	var thesePlayers;
+	
+	if (pos.toLowerCase() !== 'sp' && pos.toLowerCase() !== 'rp') 
+	{
+		theseHeadings = availableHitterHeadings;
+		thisCol = 'mR';
+	}
+	else if (pos.toLowerCase() === 'sp')
+	{
+		theseHeadings = availableSPHeadings;
+		thisCol = 'mW';
+	}
+	else if (pos.toLowerCase() === 'rp')
+	{
+		theseHeadings = availableRPHeadings;
+		thisCol = 'mSV';
+	}
+	
+	tableText += '<thead><tr>';
+	for (var i = 0; i < theseHeadings.length; i++)
+	{
+		var th = theseHeadings[i];
+		if (th !== 'TeamPos' && th !== 'Name' && th !== 'Team') th = th.replace('m', '');
+		
+		tableText += '<th>' + th + '</th>';
+	}
+	tableText += '</tr></thead><tbody>';
+	
+	if (pos === 'UT')
+	{
+		thesePlayers = JSON.parse(JSON.stringify(available_hitters));
+	}
+	else if (pos === 'MI')
+	{
+		thesePlayers = available_hitters.filter(obj => obj.POS.includes('2B') || obj.POS === 'SS');
+	}
+	else if (pos === 'CI')
+	{
+		thesePlayers = available_hitters.filter(obj => obj.POS.includes('1B') || obj.POS === '3B');
+	}
+	else if (pos.toLowerCase() !== 'sp' && pos.toLowerCase() !== 'rp') 
+	{
+		thesePlayers = available_hitters.filter(obj => obj.POS.includes(pos));
+	}
+	else if (pos.toLowerCase() === 'sp')
+	{
+		thesePlayers = JSON.parse(JSON.stringify(available_sps));
+	}
+	else if (pos.toLowerCase() === 'rp')
+	{
+		thesePlayers = JSON.parse(JSON.stringify(available_rps));
+	}
+	
+	// hitter player info
+	for (var i = 0; i < thesePlayers.length; i++)
+	{
+		tableText += '<tr>';
+		for (j = 0; j < theseHeadings.length; j++)
+		{
+			var this_col = theseHeadings[j];
+			if (theseHeadings.indexOf(this_col) >= theseHeadings.indexOf(thisCol))
+			{
+				tableText += '<td>' + roundNumber(thesePlayers[i][this_col],2) + '</td>';
+			}
+			else
+			{
+				tableText += '<td>' + thesePlayers[i][this_col] + '</td>';
+			}
+		}
+		tableText += '</tr>';
+	}
+	tableText += '</tbody></table>';
+	$('#availablePlayers_table').append(tableText);
+	showAvailablePlayers();
+}
+
+function showAvailablePlayers()
+{
+	$('#myteam_table').hide();
+	$('#availablePlayers_table').show();
+	attachEventListeners(); // Then add event listeners
+	window.scrollTo({
+		top: 0,
+		left: 0,
+	behavior: 'auto' // Optional: 'smooth' for smooth scrolling
+	});
+}
+
+function standardizeNames(df)
+{
+	// Update names based on conditions
+	df.forEach(entry => {
+		if (entry.Name === 'Luis Robert Jr.') {
+			entry.Name = 'Luis Robert';
+		} else if (entry.Name === 'Frankie Montas Jr.') {
+			entry.Name = 'Frankie Montas';
+		} else if (entry.Name === 'Cedric Mullins') {
+			entry.Name = 'Cedric Mullins II';
+		} else if (entry.Name === 'TJ Friedl') {
+			entry.Name = 'T.J. Friedl';
+		} else if (entry.Name === 'JJ Bleday') {
+			entry.Name = 'J.J. Bleday';
+		} else if (entry.Name === 'Ha-Seong Kim') {
+			entry.Name = 'Ha-seong Kim';
+		} else if (entry.Name === 'Colt Keith') {
+			entry.Name = 'Colten Keith';
+		} else if (entry.Name === 'Victor Scott II') {
+			entry.Name = 'Victor Scott';
+		}
+	});
+	
+	// update apostrophe character
+	df.forEach(obj => {
+	  obj.Name = obj.Name.replace(new RegExp('`', 'g'), "'");
+	});
+	return(df);
+}
+
+function csvToJson(csv) {
+    // Split the CSV into rows
+    const rows = csv.split("\n");
+
+    // Get the headers from the first row and remove extra quotes
+    const headers = rows[0]
+        .split(",")
+        .map(header => header.trim().replace(/^"|"$/g, ''));
+
+    // Initialize an empty array to store JSON objects
+    const jsonArray = [];
+
+    // Loop through the remaining rows
+    for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (row.trim() === "") continue;  // Skip empty rows
+
+        // Use a regular expression to handle commas inside quoted cells
+        const values = [];
+        let insideQuotes = false;
+        let currentValue = "";
+
+        // Loop through each character of the row
+        for (let char of row) {
+            if (char === '"' && !insideQuotes) {
+                // Start of a quoted field
+                insideQuotes = true;
+            } else if (char === '"' && insideQuotes) {
+                // End of a quoted field
+                insideQuotes = false;
+            } else if (char === ',' && !insideQuotes) {
+                // Comma outside of quotes, add the current value to values array
+                values.push(currentValue.trim());
+                currentValue = "";  // Reset for the next value
+            } else {
+                // Accumulate characters for the current value
+                currentValue += char;
+            }
+        }
+        // Add the last value after the loop
+        values.push(currentValue.trim());
+
+        const jsonObject = {};
+
+        // Loop through the headers and assign values to each header
+        for (let j = 0; j < headers.length; j++) {
+            // Assign the corresponding value to the header
+            jsonObject[headers[j]] = values[j] || "";
+        }
+
+        // Push the object into the array
+        jsonArray.push(jsonObject);
+    }
+
+    return jsonArray;
+}
+
+function roundNumber(value, decimals) 
+{
+  const factor = Math.pow(10, decimals);
+  return (Number(Math.round(Number(value) * factor) / factor).toFixed(decimals));
+}
+</script>
+
+
+<style>
+
+.table-container {
+	display: grid;
+	grid-template-columns: 1fr .9fr; /* Two columns of equal width */
+	gap: 50px; /* Optional space between tables */
+	align-items: flex-start;
+}
+        
+.styled-table {
+    border-collapse: collapse;
+    margin: 20px 0;
+    font-size: 0.9em;
+    font-family: sans-serif;
+    min-width: 400px;
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
+}
+
+.team-table {
+    border-collapse: collapse;
+    margin: 20px 0;
+    font-size: 0.9em;
+    font-family: sans-serif;
+    min-width: 400px;
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
+}
+
+thead tr {
+    background-color: #00338D;
+    color: #ffffff;
+    text-align: center;
+}
+
+th,td {
+    padding: 12px 15px;
+    text-align: center;
+}
+
+
+body tr {
+    border-bottom: 1px solid #dddddd;
+}
+
+tbody tr:nth-of-type(even) {
+    background-color: #f3f3f3;
+}
+
+tbody tr:last-of-type {
+    border-bottom: 2px solid #00338D;
+}
+
+.styled-table th {
+      cursor: pointer;
+}
+
+.styled-table th:hover {
+  background-color: #f1f1f1;
+  color: black;
+}
+
+/* Define the highlight class for the clicked header */
+.styled-table th.highlight {
+  background-color: white; /* Change this to your preferred highlight color */
+  color: #00338D;  /* Optional: changes the text color */
+}
+
+
+#loading{
+	text-align: center;
+	font-weight: bold;
+	font-size: 36px;
+}
+
+.link {
+    color:blue;
+    text-decoration:underline;
+    cursor:pointer;
+}
+
+#myteam_table
+{
+	display: none;
+}
+
+#availablePlayers_table
+{
+	display: none;
+}
+
+</style>
+
+<body>
+<div id="pick"></div>
+<div id="menu"></div>
+<div id="myteam_table" class="table-container"></div>
+<div id="availablePlayers_table"></div>
+<div id="loading">Loading...</div>
+
+<script>
+// Function to sort the table
+// Object to store sort direction for each column
+const sortDirections = {};
+
+function sortTable(columnIndex, isNumeric) {
+    const table = document.getElementById("player_table");
+
+    // Check if table is null or not yet present
+    if (!table) {
+        return;
+    }
+
+    // Ensure the table has rows
+    if (table.rows.length <= 1) {
+        return;
+    }
+
+    const rows = Array.from(table.rows).slice(1);  // Skip the header row
+
+    // Get the current direction, default to descending (highest to lowest)
+    let direction = sortDirections[columnIndex] || -1;  // Default is descending (-1)
+
+    // Toggle the sort direction for the next click
+    sortDirections[columnIndex] = direction === -1 ? 1 : -1;
+
+    let sortedRows;
+    if (isNumeric) {
+        sortedRows = rows.sort((rowA, rowB) => {
+            const cellA = rowA.cells[columnIndex].innerText.trim().replace('$', '');
+            const cellB = rowB.cells[columnIndex].innerText.trim().replace('$', '');
+
+            // Parse the numeric values, treat 'NA' as NaN
+            const numA = isNaN(parseFloat(cellA)) || cellA === 'NA' ? -Infinity : parseFloat(cellA);
+            const numB = isNaN(parseFloat(cellB)) || cellB === 'NA' ? -Infinity : parseFloat(cellB);
+
+            return direction * (numA - numB);  // Apply direction to the comparison
+        });
+    } else {
+        sortedRows = rows.sort((rowA, rowB) => {
+            const cellA = rowA.cells[columnIndex].innerText.toLowerCase();
+            const cellB = rowB.cells[columnIndex].innerText.toLowerCase();
+            return direction * cellA.localeCompare(cellB);  // Apply direction to the comparison
+        });
+    }
+
+    // Reattach sorted rows to the table
+    for (let row of sortedRows) {
+        table.appendChild(row);
+    }
+
+    // Reapply the alternating row shading
+    reapplyRowShading(table);
+}
+
+function reapplyRowShading(table) {
+    const rows = table.querySelectorAll("tr");
+
+    rows.forEach((row, index) => {
+        if (index % 2 === 0) {
+            row.style.backgroundColor = "";  // Clear any previous shading
+        } else {
+            row.style.backgroundColor = "#f3f3f3";  // Apply alternating shading for odd rows
+        }
+    });
+}
+
+function attachEventListeners() {
+  document.querySelectorAll("#player_table thead th").forEach((headerCell, index) => {
+    headerCell.addEventListener("click", () => {
+      // Update the last clicked header
+      if (lastClickedHeader) {
+        // Remove the highlight class from the previously clicked header
+        lastClickedHeader.classList.remove('highlight');
+      }
+
+      // Set the new clicked header as the last clicked header
+      lastClickedHeader = headerCell;
+
+      // Add the highlight class to the clicked header
+      headerCell.classList.add('highlight');
+
+      // Determine if the column is numeric for sorting
+      const isNumeric = headerCell.innerText === 'RS_Dollars' || headerCell.innerText === 'R' || 
+                        headerCell.innerText === 'RBI' || headerCell.innerText === 'HR' || 
+                        headerCell.innerText === 'SB' || headerCell.innerText === 'AVG' || 
+                        headerCell.innerText === 'W' || headerCell.innerText === 'K' || 
+                        headerCell.innerText === 'ERA' || headerCell.innerText === 'WHIP' || 
+                        headerCell.innerText === 'SV' || headerCell.innerText === 'ADP' || 
+                        headerCell.innerText === 'projValue';
+
+      // Perform sorting based on the clicked header
+      sortTable(index, isNumeric);
+    });
+  });
+}
+
+// Function that handles click events (you can keep it or adapt as needed)
+function handleClick(headerText) {
+  if (headerText === 'Roster') 
+  {
+     GetData('Roster');
+  } 
+  else 
+  {
+    createAvailablePlayers(headerText);
+  }
+}
+
+// Function to highlight the clicked header
+function highlightHeader(clickedHeader) {
+  // Remove the highlight class from all headers
+  const tableHeaders = document.querySelectorAll('#menu th');
+  tableHeaders.forEach(function(header) {
+    header.classList.remove('highlight'); // Remove previous highlight
+  });
+
+  // Add the highlight to the clicked header
+  clickedHeader.classList.add('highlight');
+}
+</script>
+</body>
+
+</html>
