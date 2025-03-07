@@ -16,8 +16,8 @@ window.onload = function()
 	GetData('Roster');
 }
 
-var LEAGUEID = 805;
-var TEAMID = 10816;
+var LEAGUEID = 1119; //1119
+var TEAMID = 15014; //15014
 var total_cash = 260;
 var hitter_cash = 165;
 var sp_cash = 70;
@@ -48,6 +48,7 @@ var busy = false;
 var pageURL = window.location.href;
 var suf = pageURL.substring(pageURL.indexOf("?")+1, pageURL.length);
 var maxPick = 1000;
+var inflation = [];
 if (!isNaN(Number(suf))) maxPick = Number(suf);
 
 
@@ -133,6 +134,57 @@ function createMyTeam(loc)
 	hitters = myTeam.filter(item => item.isHitter === 1);
 	pitchers = myTeam.filter(item => item.isHitter === 0);
 	
+	// go through drafted players and get their AAV
+	for (i = 0; i < drafted_players.length; i++)
+	{
+		var this_player = drafted_players[i].Name;
+		var AAV;
+		drafted_players[i].pitcherType = null;
+		if (drafted_players[i].isHitter === 1)
+		{
+			AAV = Number(proj.hitters.find(user => user.Name === this_player)?.ADP.replace('$',''));
+		}
+		
+		if (drafted_players[i].isHitter === 0)
+		{
+			AAV = Number(sp_projections.find(user => user.Name === this_player)?.ADP.replace('$',''));
+			if (isNaN(AAV))
+			{
+				AAV = Number(rp_projections.find(user => user.Name === this_player)?.ADP.replace('$',''));
+				if (!isNaN(AAV)) drafted_players[i].pitcherType = 'RP';
+			}
+			else drafted_players[i].pitcherType = 'SP';
+		}
+		
+		if (isNaN(AAV)) AAV = 1;
+		drafted_players[i].AAV = AAV;
+		drafted_players[i].inflation = drafted_players[i].Cost- AAV;
+	}
+	
+	// compute inflation for each position
+	for (i = 1; i < menuHeadings.length; i++)
+	{
+		var op;
+		var this_pos = menuHeadings[i];
+		if (this_pos === 'UT')
+		{
+			op = drafted_players.filter(item => item.isHitter === 1).reduce((sum, obj) => sum + obj.inflation, 0);
+		}
+		else if (this_pos === 'C')
+		{
+			op = drafted_players.filter(item => item.Position.includes('C,') || item.Position === 'C').reduce((sum, obj) => sum + obj.inflation, 0);
+		}
+		else if (this_pos === 'SP' || this_pos === 'RP')
+		{
+			op = drafted_players.filter(item => item.pitcherType === this_pos).reduce((sum, obj) => sum + obj.inflation, 0);
+		}
+		else
+		{
+			op = drafted_players.filter(item => item.Position.includes(this_pos)).reduce((sum, obj) => sum + obj.inflation, 0);
+		}
+		inflation.push(op);
+	}
+		
 	// compute available players
 	available_hitters = proj.hitters.filter(obj1 => !drafted_players.some(obj2 => obj1.Name === obj2.Name & obj2.isHitter === 1));
 	available_sps = proj.sp.filter(obj1 => !drafted_players.some(obj2 => obj1.Name === obj2.Name & obj2.isHitter === 0));
@@ -148,7 +200,17 @@ function createMyTeam(loc)
 	{
 		menuText += '<th>' + menuHeadings[i] + '</th>';
 	}
-	menuText += '</tr><thead></table>'
+	menuText += '</tr></thead>'
+	menuText += '<tbody><tr>'
+	
+	// inflation values
+	for (i = 0; i < menuHeadings.length; i++)
+	{
+		if (menuHeadings[i] === 'Roster') menuText += '<td></td>';
+		else menuText += '<td>' + inflation[i-1] + '</td>';
+	}
+	menuText += '</tr></tbody></table>'
+	
 	$('#menu').append(menuText);
 		
 	// update hitter table headings
@@ -593,9 +655,9 @@ function createAvailablePlayers(pos)
 	var tableText = '<table id="player_table" class="styled-table">';
 	
 	// headings
-	var availableHitterHeadings = ['Name', 'Team','POS', 'RS_Dollars', 'dollarRange', 'ADP', 'projValue', 'mR', 'mRBI', 'mHR', 'mSB', 'mAVG', 'mTotal'];
-	var availableSPHeadings = ['Name', 'Team', 'RS_Dollars', 'dollarRange', 'ADP', 'projValue', 'mW', 'mK', 'mERA', 'mWHIP'];
-	var availableRPHeadings = ['Name', 'Team', 'RS_Dollars', 'dollarRange', 'ADP', 'projValue', 'mSV', 'SV','mW', 'mK', 'mERA', 'mWHIP'];
+	var availableHitterHeadings = ['Name', 'Team','POS', 'RS_Dollars', 'dollarRange', 'ADP', 'Min', 'projValue', 'mR', 'mRBI', 'mHR', 'mSB', 'mAVG', 'mTotal'];
+	var availableSPHeadings = ['Name', 'Team', 'RS_Dollars', 'dollarRange', 'ADP', 'Min', 'projValue', 'mW', 'mK', 'mERA', 'mWHIP'];
+	var availableRPHeadings = ['Name', 'Team', 'RS_Dollars', 'dollarRange', 'ADP', 'Min', 'projValue', 'mSV', 'SV','mW', 'mK', 'mERA', 'mWHIP'];
 	var theseHeadings;
 	var thisCol;
 	var thesePlayers;
